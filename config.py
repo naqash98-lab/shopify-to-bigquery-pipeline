@@ -8,27 +8,19 @@ load_dotenv()
 
 
 class Config:
-    """Configuration class for the pipeline."""
-    
-    # -----------------
     # Shopify Configuration
-    # -----------------
     SHOPIFY_STORE_NAME = os.getenv("SHOPIFY_STORE_NAME")
     SHOPIFY_API_KEY = os.getenv("SHOPIFY_API_KEY")
     SHOPIFY_PASSWORD = os.getenv("SHOPIFY_PASSWORD")
     SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION", "2023-10")
-    
-    # -----------------
+
     # Google Cloud Configuration
-    # -----------------
     GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
     BQ_DATASET_ID = os.getenv("BQ_DATASET_ID", "raw_data")
     BQ_LOCATION = os.getenv("BQ_LOCATION", "EU")
     GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    
-    # -----------------
+
     # Pipeline Configuration
-    # -----------------
     DATA_DIR = os.getenv("DATA_DIR", "data")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     
@@ -92,7 +84,6 @@ class Config:
         return f"https://{cls.SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{cls.SHOPIFY_API_VERSION}/{endpoint}.json"
 
 
-# Validate configuration on import (can be disabled if needed)
 if __name__ != "__main__":
     try:
         Config.validate()

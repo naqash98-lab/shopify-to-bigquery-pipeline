@@ -1,18 +1,3 @@
-"""
-Shopify to BigQuery Pipeline
-----------------------------
-Main orchestrator script that runs the complete ELT pipeline:
-1. Extract data from Shopify API
-2. Load data into BigQuery
-
-Usage:
-    python pipeline.py              # Run full pipeline
-    python pipeline.py --extract    # Only extract data
-    python pipeline.py --load       # Only load data
-
-Author: Naqash Ashraf
-"""
-
 import argparse
 import logging
 import sys
@@ -21,59 +6,67 @@ from pathlib import Path
 from config import Config
 from extract_shopify_data import ShopifyExtractor
 from load_to_bigquery import BigQueryLoader
+from utils import get_incremental_timestamps
 
 # Setup logging
 logger = logging.getLogger(__name__)
 
 
 class ShopifyBigQueryPipeline:
-    """Main pipeline orchestrator."""
     
     def __init__(self):
-        """Initialize pipeline components."""
+        #Initialize pipeline components
         self.extractor = None
         self.loader = None
     
     def run_extraction(self):
-        """
-        Run the extraction phase.
-        
-        Returns:
-            bool: True if successful
-        """
         logger.info("PHASE 1: EXTRACTING DATA FROM SHOPIFY")
 
         try:
-            self.extractor = ShopifyExtractor()
-            datasets = self.extractor.extract_all()
+            # Initialize loader to check for existing data
+            if not self.loader:
+                self.loader = BigQueryLoader()
             
-            # Save to CSV
+            # Get last update timestamps for incremental extraction
+            last_timestamps = get_incremental_timestamps(self.loader)
+            
+            # Extract data with incremental timestamps
+            self.extractor = ShopifyExtractor()
+            datasets = self.extractor.extract_all(last_updated_timestamps=last_timestamps)
+            
+            # Save to CSV (only saves if data exists)
             saved_files = self.extractor.save_to_csv(datasets)
             
             if not saved_files:
-                logger.error("No data extracted!")
-                return False
+                logger.info("Extraction complete - no new data found")
+            else:
+                logger.info(f"Extraction complete! Saved {len(saved_files)} files")
             
-            logger.info(f"Extraction phase complete! Saved {len(saved_files)} files")
-            return True
+            return True, saved_files
             
         except Exception as e:
             logger.error(f"Extraction failed: {e}", exc_info=True)
-            return False
+            return False, []
     
-    def run_loading(self):
-        """
-        Run the loading phase.
-        
-        Returns:
-            bool: True if successful
-        """
+    def run_loading(self, extracted_files=None):
         logger.info("")
         logger.info("PHASE 2: LOADING DATA TO BIGQUERY")
         
+        # Skip loading if no files were extracted
+        if extracted_files is not None and len(extracted_files) == 0:
+            logger.info("No new data to load - skipping load phase")
+            return True
+        
         try:
-            self.loader = BigQueryLoader()
+            if not self.loader:
+                self.loader = BigQueryLoader()
+            
+            # Load datasets (CSVs will be deleted after successful load)
             results = self.loader.load_all_datasets()
+            
+            if not results:
+                logger.info("No CSV files to load")
+                return True
             
             if not all(results.values()):
                 logger.error("Some datasets failed to load!")
@@ -87,12 +80,6 @@ class ShopifyBigQueryPipeline:
             return False
     
     def run_full_pipeline(self):
-        """
-        Run the complete ELT pipeline.
-        
-        Returns:
-            bool: True if successful
-        """
         logger.info("Starting Shopify to BigQuery Pipeline")
         logger.info(f"Project: {Config.GCP_PROJECT_ID}")
         logger.info(f"Dataset: {Config.BQ_DATASET_ID}")
@@ -100,12 +87,13 @@ class ShopifyBigQueryPipeline:
         logger.info("")
         
         # Phase 1: Extract
-        if not self.run_extraction():
+        success, extracted_files = self.run_extraction()
+        if not success:
             logger.error("Pipeline failed at extraction phase")
             return False
         
-        # Phase 2: Load
-        if not self.run_loading():
+        # Phase 2: Load (only if we extracted new files)
+        if not self.run_loading(extracted_files=extracted_files):
             logger.error("Pipeline failed at loading phase")
             return False
         
@@ -141,23 +129,13 @@ Examples:
         action="store_true",
         help="Run only the loading phase"
     )
-    
-    parser.add_argument(
-        "--log-level",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Override log level from config"
-    )
+
     
     return parser.parse_args()
 
 
 def main():
-    """Main entry point."""
     args = parse_arguments()
-    
-    # Override log level if specified
-    if args.log_level:
-        Config.LOG_LEVEL = args.log_level
     
     # Setup logging
     Config.setup_logging()
@@ -183,10 +161,10 @@ def main():
             sys.exit(1)
         
         elif args.extract:
-            success = pipeline.run_extraction()
+            success, _ = pipeline.run_extraction()
         
         elif args.load:
-            success = pipeline.run_loading()
+            success = pipeline.run_loading(extracted_files=None)
         
         else:
             # Run full pipeline

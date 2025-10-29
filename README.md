@@ -26,6 +26,7 @@ shopify-to-bigquery-pipeline/
 ├── extract_shopify_data.py  # Extracts data from Shopify REST API
 ├── load_to_bigquery.py      # Loads CSVs into BigQuery
 ├── pipeline.py              # Orchestrates the full pipeline (extract + load)
+├── utils.py                 # Helper utilities (incremental loading logic)
 ├── data/                    # Stores extracted CSV files
 ├── requirements.txt         # Python dependencies
 ├── .env.example             # Example environment variables
@@ -130,9 +131,5 @@ After execution, your BigQuery project will contain a dataset named **`raw_data`
 
 ---
 
-##  Deliverables
-- **Codebase:** This GitHub repository  
-- **Data Warehouse:** `marketing-pipeline-demo-475611.raw_data` dataset populated with Shopify test data
----
 ##  Notes 
-- Future improvements could include incremental loads, transformation layers (Dataform), and orchestration via Airflow.
+- Future improvements could include orchestration via Airflow, and deduplication logic.

@@ -1,18 +1,7 @@
-"""
-Load to BigQuery
-----------------
-Loads extracted Shopify datasets (orders, customers, products)
-from Pandas DataFrames into BigQuery tables under 'raw_data' dataset.
-
-Features:
-- Automatic dataset creation if it doesn't exist
-- Schema auto-detection
-- Proper error handling and logging
-- Configurable via config.py
-"""
-
 import logging
+import sys
 from pathlib import Path
+from datetime import datetime, timedelta
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from google.api_core import exceptions
@@ -25,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 class BigQueryLoader:
-    """Handles loading data to BigQuery with dataset management."""
     
     def __init__(self):
         """Initialize BigQuery client and ensure dataset exists."""
@@ -47,9 +35,6 @@ class BigQueryLoader:
             raise
     
     def _ensure_dataset_exists(self):
-        """
-        Creates the BigQuery dataset if it doesn't exist.
-        """
         dataset_id = f"{Config.GCP_PROJECT_ID}.{Config.BQ_DATASET_ID}"
         
         try:
@@ -63,9 +48,7 @@ class BigQueryLoader:
             
             dataset = bigquery.Dataset(dataset_id)
             dataset.location = Config.BQ_LOCATION
-            dataset.description = (
-                "Raw data from Shopify store. "
-            )
+            dataset.description = "Raw data from Shopify store - orders, customers, and products"
             
             dataset = self.client.create_dataset(dataset, timeout=30)
             logger.info(f"Created dataset {dataset.dataset_id}")
@@ -76,14 +59,7 @@ class BigQueryLoader:
     
     @staticmethod
     def clean_column_names(df):
-        """
-        Sanitize DataFrame column names to be BigQuery compatible.
-        
-        Rules:
-        - Only letters, numbers, and underscores
-        - Must start with letter or underscore
-        - Cannot end with underscore
-        """
+        # Sanitize DataFrame column names to be BigQuery compatible.
         df = df.copy()
         df.columns = (
             df.columns
@@ -100,21 +76,55 @@ class BigQueryLoader:
         
         return df
     
-    def load_dataframe(self, df, table_name, write_disposition="WRITE_TRUNCATE"):
-        """
-        Loads a pandas DataFrame to BigQuery.
+    def get_last_updated_timestamp(self, table_name, timestamp_field="updated_at"):
+        # Gets the most recent timestamp from a BigQuery table for incremental loading.
+        table_id = f"{Config.GCP_PROJECT_ID}.{Config.BQ_DATASET_ID}.{table_name}"
         
-        Args:
-            df: pandas DataFrame to load
-            table_name: Name of the target table
-            write_disposition: How to handle existing data
-                - WRITE_TRUNCATE: Replace table (default)
-                - WRITE_APPEND: Append to table
-                - WRITE_EMPTY: Only write if table is empty
-        
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        try:
+            # Check if table exists
+            self.client.get_table(table_id)
+            
+            # Query for max timestamp
+            query = f"""
+                SELECT MAX({timestamp_field}) as last_update
+                FROM `{table_id}`
+            """
+            
+            result = self.client.query(query).result()
+            row = next(result, None)
+            
+            if row and row.last_update:
+                # Handle both datetime objects and strings
+                if isinstance(row.last_update, str):
+                    # Parse string to datetime to add offset
+                    try:
+                        dt = datetime.fromisoformat(row.last_update)
+                    except ValueError:
+                        # If parsing fails, return as-is
+                        logger.warning(f"Could not parse timestamp: {row.last_update}")
+                        return row.last_update
+                else:
+                    # Already a datetime object
+                    dt = row.last_update
+                
+                # Add 1 second to avoid re-extracting the same record
+                dt_offset = dt + timedelta(seconds=1)
+                timestamp = dt_offset.isoformat()
+                
+                logger.info(f"Last update for {table_name}: {timestamp} (offset applied)")
+                return timestamp
+            else:
+                logger.info(f"No data in {table_name} - will do full extraction")
+                return None
+                
+        except exceptions.NotFound:
+            logger.info(f"Table {table_name} doesn't exist - will do full extraction")
+            return None
+        except Exception as e:
+            logger.warning(f"Error getting last timestamp from {table_name}: {e}")
+            return None
+    
+    def load_dataframe(self, df, table_name, write_disposition="WRITE_APPEND"):
         if df.empty:
             logger.warning(f"DataFrame for {table_name} is empty. Skipping.")
             return False
@@ -144,7 +154,6 @@ class BigQueryLoader:
             table = self.client.get_table(table_id)
             logger.info(
                 f"Loaded {table.num_rows} rows into {table_name} "
-                f"({table.num_bytes / (1024*1024):.2f} MB)"
             )
             return True
             
@@ -153,16 +162,6 @@ class BigQueryLoader:
             return False
     
     def load_from_csv(self, csv_path, table_name):
-        """
-        Loads data from CSV file to BigQuery.
-        
-        Args:
-            csv_path: Path to CSV file
-            table_name: Name of the target table
-        
-        Returns:
-            bool: True if successful
-        """
         csv_path = Path(csv_path)
         
         if not csv_path.exists():
@@ -172,19 +171,20 @@ class BigQueryLoader:
         try:
             logger.info(f"Reading {csv_path.name}...")
             df = pd.read_csv(csv_path)
-            return self.load_dataframe(df, table_name)
+            success = self.load_dataframe(df, table_name)
+            
+            # Delete CSV after successful load to prevent re-loading
+            if success:
+                csv_path.unlink()
+                logger.debug(f"Deleted {csv_path.name} after successful load")
+            
+            return success
             
         except Exception as e:
             logger.error(f"Error reading {csv_path}: {e}")
             return False
     
     def load_all_datasets(self):
-        """
-        Loads all extracted Shopify datasets from CSV files into BigQuery.
-        
-        Returns:
-            dict: Status of each table load (table_name: success_bool)
-        """
         Config.ensure_data_dir()
         results = {}
         
@@ -192,15 +192,24 @@ class BigQueryLoader:
         
         for csv_name, table_name in Config.TABLE_MAPPING.items():
             csv_path = Path(Config.DATA_DIR) / f"{csv_name}.csv"
+            
+            if not csv_path.exists():
+                logger.debug(f"Skipping {csv_name} - no CSV file found")
+                continue
+            
             success = self.load_from_csv(csv_path, table_name)
             results[table_name] = success
         
         # Summary
+        if not results:
+            logger.info("No CSV files to load")
+            return results
+        
         successful = sum(results.values())
         total = len(results)
         
         if successful == total:
-            logger.info(f"Successfully loaded all {total} datasets to BigQuery!")
+            logger.info(f"Successfully loaded all {total} datasets!")
         else:
             logger.warning(
                 f"Loaded {successful}/{total} datasets. "
@@ -218,12 +227,12 @@ def main():
         results = loader.load_all_datasets()
         
         # Exit with error code if any loads failed
-        if not all(results.values()):
-            exit(1)
+        if results and not all(results.values()):
+            sys.exit(1)
             
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")
-        exit(1)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
