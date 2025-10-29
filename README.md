@@ -1,99 +1,138 @@
 # Shopify to BigQuery Data Pipeline
 
-An automated pipeline that extracts data from Shopify and loads it into Google BigQuery.
+This project implements an **automated ETL pipeline** that extracts key datasets (`orders`, `customers`, and optionally `products`) from a Shopify store and loads them into **Google BigQuery**.  
 
-## What It Does
+---
 
-- Extracts orders, customers, and products from your Shopify store
-- Loads the data into BigQuery for analysis
-- Handles pagination and rate limiting automatically
-- Creates BigQuery dataset and tables if they don't exist
+## Overview
 
-## Prerequisites
+The pipeline connects to a Shopify store via the REST Admin API, retrieves paginated data, stores it as raw CSV files locally, and then loads the cleaned data into BigQuery under a `raw_data` dataset.
 
-- Python 3.8+
-- A Shopify store with API access
-- Google Cloud Platform account with BigQuery enabled
+### Key Features
+- Extracts **orders**, **customers**, and **products**
+- Handles pagination, retries, and rate limits
+- Cleans column names for BigQuery compatibility
+- Automatically creates BigQuery tables and dataset if missing
+- Modular structure for scalability (extract, load, config, orchestration)
 
-## Setup
-
-### 1. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Configure Shopify API
-
-Create a private app in your Shopify admin:
-- Go to **Apps** → **Develop apps** → **Create an app**
-- Add permissions: `read_orders`, `read_customers`, `read_products`
-- Note down your API Key, Password, and Store Name
-
-### 3. Set Up Google Cloud
-
-1. Create a GCP project
-2. Enable BigQuery API
-3. Create a service account with BigQuery Admin role
-4. Download the JSON key file and save it as `big_query.json`
-
-### 4. Configure Environment
-
-Copy `.env.example` to `.env` and fill in your credentials:
-
-```bash
-SHOPIFY_STORE_NAME=your-store-name
-SHOPIFY_API_KEY=your-api-key
-SHOPIFY_PASSWORD=your-password
-
-GCP_PROJECT_ID=your-project-id
-BQ_DATASET_ID=raw_data
-BQ_LOCATION=US
-GOOGLE_APPLICATION_CREDENTIALS=big_query.json
-```
-
-## Usage
-
-Run the full pipeline:
-```bash
-python pipeline.py
-```
-
-Or run individual steps:
-```bash
-python pipeline.py --extract  # Only extract from Shopify
-python pipeline.py --load     # Only load to BigQuery
-```
+---
 
 ## Project Structure
 
 ```
-├── pipeline.py                 # Main script
-├── extract_shopify_data.py     # Shopify data extraction
-├── load_to_bigquery.py         # BigQuery loading
-├── config.py                   # Configuration management
-├── requirements.txt            # Dependencies
-└── data/                       # Temporary CSV files
+shopify-to-bigquery-pipeline/
+│
+├── config.py                # Handles environment variables and configuration
+├── extract_shopify_data.py  # Extracts data from Shopify REST API
+├── load_to_bigquery.py      # Loads CSVs into BigQuery
+├── pipeline.py              # Orchestrates the full pipeline (extract + load)
+├── data/                    # Stores extracted CSV files
+├── requirements.txt         # Python dependencies
+├── .env.example             # Example environment variables
+└── README.md
 ```
 
-## BigQuery Tables
+---
 
-The pipeline creates these tables:
+## Setup Instructions
 
-- `shopify_orders` - Order details and line items
-- `shopify_customers` - Customer information
-- `shopify_products` - Product catalog and variants
+### 1️ Clone the Repository
+```bash
+git clone https://github.com/naqash98-lab/shopify-to-bigquery-pipeline.git
+cd shopify-to-bigquery-pipeline
+```
 
-## Troubleshooting
+### 2️ Create a Virtual Environment
+```bash
+python -m venv venv
+venv\Scripts\activate       # On Windows
+# or
+source venv/bin/activate    # On Mac/Linux
+```
 
-**Configuration errors**: Make sure all required variables in `.env` are set
+### 3 Install Dependencies
+```bash
+pip install -r requirements.txt
+```
 
-**Authentication failed**: Check your Shopify API credentials and GCP service account permissions
+### 4️ Configure Environment Variables
+Create a `.env` file (use `.env.example` as a template):
 
-**Rate limiting**: The pipeline handles this automatically with retries
+```bash
+SHOPIFY_STORE_NAME=impression-digital-test-store
+SHOPIFY_API_KEY=your_api_key
+SHOPIFY_PASSWORD=your_api_password
+SHOPIFY_API_VERSION=2023-10
 
-## Notes
+GCP_PROJECT_ID=marketing-pipeline-demo-475611
+BQ_DATASET_ID=raw_data
+BQ_LOCATION=EU
+GOOGLE_APPLICATION_CREDENTIALS=big_query.json
+```
 
-- The BigQuery dataset is created automatically if it doesn't exist
-- CSV files in `data/` folder are temporary and gitignored
-- Never commit `.env` or `big_query.json` to version control
+> Do not upload your `.env` or `big_query.json` file to GitHub.
+
+---
+
+## Running the Pipeline
+
+### Run the Full Pipeline (Extract + Load)
+```bash
+python pipeline.py
+```
+
+### Extract Only (Shopify → CSV)
+```bash
+python pipeline.py --extract
+```
+
+### Load Only (CSV → BigQuery)
+```bash
+python pipeline.py --load
+```
+
+---
+
+##  Output in BigQuery
+
+After execution, your BigQuery project will contain a dataset named **`raw_data`**, with the following tables:
+
+| Table | Description |
+|--------|--------------|
+| `shopify_orders` | Raw order data extracted from Shopify |
+| `shopify_customers` | Customer profiles |
+| `shopify_products` | Product catalog |
+
+---
+
+## How It Works
+
+1. **Extraction:**  
+   `extract_shopify_data.py` connects to the Shopify REST API using API credentials and retrieves paginated data for orders, customers, and products.
+
+2. **Data Storage:**  
+   Extracted data is normalized using Pandas and saved as CSVs in the `/data` directory.
+
+3. **Loading:**  
+   `load_to_bigquery.py` reads the CSVs, sanitizes column names, and uploads them into BigQuery using the official `google-cloud-bigquery` client.
+
+4. **Orchestration:**  
+   `pipeline.py` coordinates both phases and can be run end-to-end or stepwise using command-line arguments.
+
+---
+
+## Design Highlights
+- Modular architecture (easy to extend or integrate with Airflow / Meltano)
+- Automatically handles rate limits and retries
+- Cleans column names to meet BigQuery schema rules
+- Environment variables managed through `.env` for secure credential storage
+- Ready for deployment on GCP or container-based environments
+
+---
+
+##  Deliverables
+- **Codebase:** This GitHub repository  
+- **Data Warehouse:** `marketing-pipeline-demo-475611.raw_data` dataset populated with Shopify test data
+---
+##  Notes 
+- Future improvements could include incremental loads, transformation layers (Dataform), and orchestration via Airflow.
